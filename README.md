@@ -18,9 +18,16 @@ netlify.toml       배포 설정 (publish = public)
 
 ## 데이터 저장 방식
 
-- `companies` 거래처, `transactions` 거래(충전 deposit / 사용 usage)
-- 서명 이미지: Storage `signatures` 버킷(비공개)에 `{거래ID}/{sig|staffSig|adminSig}.jpg` 로 저장, 거래 행에는 경로만 기록
-- 삭제는 소프트 삭제(`deleted_at`), 모든 추가·수정은 `audit_log`에 자동 기록 (DB 트리거)
+| 저장소 | 내용 | 앱 권한 (로그인 사용자) |
+|---|---|---|
+| `companies` 테이블 | 거래처 (이름, 담당자, 연락처, 등록일) | 읽기·추가·수정 |
+| `transactions` 테이블 | 거래 (충전 `deposit` / 사용 `usage`, 금액, 일시, 식사자, 서명 경로) | 읽기·추가·수정 |
+| `audit_log` 테이블 | 위 두 테이블의 모든 추가·수정 이력 (변경 전/후 행, 변경 계정, 시각). DB 트리거가 자동 기록 | 읽기만 |
+| Storage `signatures` 버킷 (비공개) | 서명 이미지 `{거래ID}/{sig\|staffSig\|adminSig}.jpg`. 거래 행에는 경로만 기록 | 읽기·업로드 |
+
+- 잔액은 저장하지 않고 거래 합계(충전 − 사용)로 계산
+- 삭제는 소프트 삭제(`deleted_at` 기록). 실제 DELETE는 정책상 불가, 서명 파일도 지우지 않음
+- 실수 복구: `audit_log`의 `old_row`로 이전 값 확인 후 되돌리기
 - 앱의 `save()`는 전체 상태를 넘기고, `storage.js`가 직전 상태와 비교해 바뀐 행만 전송
 - 저장 실패 시 전송 대기 목록(localStorage)에 보관 → 다음 저장 또는 다음 실행 때 자동 재전송
 
