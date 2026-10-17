@@ -1,0 +1,13 @@
+# Netlify 배포 설정: public/ 폴더만 배포 (.env, scripts 등은 올라가지 않음)
+[build]
+  publish = "public"
+  command = ""
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"
+    # 배포 직후 패드가 옛 파일을 쓰지 않도록 항상 최신 확인
+    Cache-Control = "no-cache"
