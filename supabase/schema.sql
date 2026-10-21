@@ -1,4 +1,4 @@
--- 장부결제 v20 스키마
+-- 장부결제 v21 스키마
 -- Supabase 대시보드 → SQL Editor에 전체를 붙여넣고 Run.
 -- 여러 번 실행해도 안전하도록 작성됨 (if not exists / or replace).
 

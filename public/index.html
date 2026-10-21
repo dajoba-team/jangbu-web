@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="장부결제">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#f8fafc">
-<title>장부결제 v20</title>
+<title>장부결제 v21</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
@@ -68,7 +68,7 @@ const openIDB=()=>{
 // v18 호환 (레거시 마이그레이션용)
 const idbGet=async k=>{const db=await openIDB();return new Promise((res,rej)=>{const tx=db.transaction(STORE_KV,"readonly");const r=tx.objectStore(STORE_KV).get(k);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})};
 const idbSet=async(k,v)=>{const db=await openIDB();return new Promise((res,rej)=>{const tx=db.transaction(STORE_KV,"readwrite");const r=tx.objectStore(STORE_KV).put(v,k);r.onsuccess=()=>res();r.onerror=()=>rej(r.error);tx.onerror=()=>rej(tx.error)})};
-// v20: metaGet/metaSet/sigs* 는 storage.js (Supabase)로 이동
+// v21: metaGet/metaSet/sigs* 는 storage.js (Supabase)로 이동
 const idbStorageInfo=async()=>{try{if(navigator.storage&&navigator.storage.estimate){const e=await navigator.storage.estimate();const usedMB=((e.usage||0)/1024/1024).toFixed(2);const quotaMB=Math.floor((e.quota||0)/1024/1024);return{used:usedMB,quota:quotaMB}}}catch{}return{used:"?",quota:0}};
 // 거래에서 서명 분리/결합 유틸
 const splitSig=tx=>{const{sig,adminSig,staffSig,...rest}=tx;const hasSig=sig||adminSig||staffSig;return{txNoSig:rest,sigRec:hasSig?{txId:tx.id,sig:sig||null,adminSig:adminSig||null,staffSig:staffSig||null}:null}};
@@ -571,7 +571,7 @@ function App(){
 
   // v19: 자동백업 - 메타만 스냅샷 (서명은 별도 저장소라 중복 저장 안 함)
   ue(()=>{
-    return; // v20: 데이터가 서버에 저장되므로 기기 내부 자동백업 중지
+    return; // v21: 데이터가 서버에 저장되므로 기기 내부 자동백업 중지
     if(autoRef.current)return;
     if(data.cos.length===0&&data.txs.length===0)return;
     const log=getBkLog();const td=today();
@@ -647,7 +647,7 @@ function App(){
   const closeM=k=>setModals(p=>({...p,[k]:false}));
 
   // === COMPUTED ===
-  // v20: 잔액을 거래 변경 시 한 번만 계산 (기존: bal() 호출마다 전체 거래 재계산)
+  // v21: 잔액을 거래 변경 시 한 번만 계산 (기존: bal() 호출마다 전체 거래 재계산)
   const balMap=um(()=>{const m={};data.txs.forEach(t=>{m[t.cid]=(m[t.cid]||0)+(t.type==="deposit"?t.amount:-t.amount)});return m},[data.txs]);
   const bal=uc(id=>balMap[id]||0,[balMap]);
   const ctxs=uc(id=>data.txs.filter(t=>t.cid===id).sort((a,b)=>new Date(b.date)-new Date(a.date)),[data.txs]);
@@ -1120,7 +1120,7 @@ function App(){
 
   const adminHome=()=>{const bulkCard=bulkDue&&h("div",{onClick:()=>setBulkOpen(true),style:{display:"flex",alignItems:"center",gap:"12px",padding:"14px 16px",marginBottom:"10px",borderRadius:"16px",background:"linear-gradient(135deg,#eef2ff,#e0e7ff)",border:"1.5px solid #a5b4fc",cursor:"pointer"}},h("span",{style:{fontSize:"22px"}},"📅"),h("div",{style:{flex:1}},h("div",{style:{fontSize:"15px",fontWeight:"800",color:"#4338ca"}},"오늘은 정기 잔액 안내 문자 발송일"),h("div",{style:{fontSize:"12px",color:"#4f46e5",marginTop:"2px"}},TARGETS[cfg.mTarget]+" · "+bulkList.filter(x=>smsNums(x.c).length&&!sentThisMonth(x.c)).length+"곳 대기")),h("span",{style:{fontSize:"13px",fontWeight:"700",color:"#4f46e5"}},"발송 ›"));const debtCard=debtList.length>0&&h("div",{onClick:()=>setDebtPop({admin:true,list:debtList}),style:{display:"flex",alignItems:"center",gap:"12px",padding:"14px 16px",marginBottom:"14px",borderRadius:"16px",background:"linear-gradient(135deg,#fef2f2,#fee2e2)",border:"1.5px solid #fca5a5",cursor:"pointer"}},h(Ic,{type:"bell",size:22,color:"#dc2626"}),h("div",{style:{flex:1}},h("div",{style:{fontSize:"15px",fontWeight:"800",color:"#b91c1c"}},"충전 요청 필요 "+debtList.length+"곳"),h("div",{style:{fontSize:"12px",color:"#991b1b",marginTop:"2px"}},debtList.slice(0,3).map(x=>x.name+" "+man(x.bal)).join(" · ")+(debtList.length>3?" 외":""))),h("span",{style:{fontSize:"13px",fontWeight:"700",color:"#dc2626"}},"보기 ›"));const tb=data.cos.reduce((s,c)=>s+bal(c.id),0);const tt=data.txs.filter(t=>kday(t.date)===today());const tu=tt.filter(t=>t.type==="usage").reduce((s,t)=>s+t.amount,0);const td=tt.filter(t=>t.type==="deposit").reduce((s,t)=>s+t.amount,0);const tm=tt.filter(t=>t.type==="usage").length;
     return h("div",{style:{padding:"18px 18px 100px"}},
-      h("h1",{style:{fontSize:"22px",fontWeight:"800",margin:"0 0 3px"}},"장부결제 관리"),h("p",{style:{color:"#94a3b8",fontSize:"13px",margin:"0 0 20px"}},today().replace(/-/g,".")+" · v20 서버 저장 (v19.9 매장 홍보 배너 · 거래처 정렬·필터 · 정기 문자 · 담당자 연락처)"),
+      h("h1",{style:{fontSize:"22px",fontWeight:"800",margin:"0 0 3px"}},"장부결제 관리"),h("p",{style:{color:"#94a3b8",fontSize:"13px",margin:"0 0 20px"}},today().replace(/-/g,".")+" · v21 서버 저장 (v19.9 매장 홍보 배너 · 거래처 정렬·필터 · 정기 문자 · 담당자 연락처)"),
       bulkCard,
       debtCard,
       // v19: 저장 상태 배지 (Silent Failure 방지)
@@ -1236,7 +1236,7 @@ function App(){
           h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px",fontSize:"12px"}},
             h("span",{style:{color:"#64748b"}},"거래처"),h("span",{style:{fontWeight:"700",textAlign:"right"}},data.cos.length+"개"),
             h("span",{style:{color:"#64748b"}},"거래"),h("span",{style:{fontWeight:"700",textAlign:"right"}},data.txs.length+"건"),
-            h("span",{style:{color:"#64748b"}},"저장소"),h("span",{style:{fontWeight:"700",textAlign:"right",color:"#10b981"}},"Supabase 서버 v20"),
+            h("span",{style:{color:"#64748b"}},"저장소"),h("span",{style:{fontWeight:"700",textAlign:"right",color:"#10b981"}},"Supabase 서버 v21"),
             h("span",{style:{color:"#64748b"}},"사용량"),h("span",{style:{fontWeight:"700",textAlign:"right"}},storageInfo.used+"MB"+(storageInfo.quota>0?" / "+(storageInfo.quota>1024?(storageInfo.quota/1024).toFixed(1)+"GB":storageInfo.quota+"MB"):"")))),
         h("div",{style:{padding:"14px",background:"#f0fdf4",borderRadius:"12px",border:"1px solid #bbf7d0",display:"flex",justifyContent:"space-between",alignItems:"center"}},
           h("div",null,h("div",{style:{fontSize:"13px",fontWeight:"700",color:"#16a34a"}},"🔄 자동백업"),h("div",{style:{fontSize:"11px",color:"#64748b"}},"마지막: "+backupInfo.last)),
