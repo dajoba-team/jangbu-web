@@ -25,9 +25,15 @@ if (!file) { console.error("사용법: node scripts/import.mjs <백업.json> [--
 const { _coToRow, _rowToCo, _txToRow, _rowToTx, _SIG_KINDS } = loadMapping();
 
 const stripSigs = t => { const r = { ...t }; for (const k of Object.keys(_SIG_KINDS)) delete r[k]; return r; };
-// 키 순서와 무관하게 비교
-const canon = o => JSON.stringify(Object.keys(o).sort().reduce((a, k) => (a[k] = o[k], a), {}));
+// 키 순서와 무관하게 비교 (중첩 객체 포함: DB jsonb는 키 순서를 바꿔 돌려줌)
+const sortDeep = v => Array.isArray(v) ? v.map(sortDeep) : v && typeof v === "object" ? Object.keys(v).sort().reduce((a, k) => (a[k] = sortDeep(v[k]), a), {}) : v;
+const canon = o => JSON.stringify(sortDeep(o));
 const balances = txs => { const m = {}; for (const t of txs) m[t.cid] = (m[t.cid] || 0) + (t.type === "deposit" ? t.amount : -t.amount); return m; };
+// 한국시간(UTC+9) 기준 월 (인수인계서: 월별 집계는 Asia/Seoul 고정)
+const kstMonth = iso => new Date(new Date(iso).getTime() + 9 * 3600e3).toISOString().slice(0, 7);
+const monthly = txs => { const m = {}; for (const t of txs) { const k = kstMonth(t.date); m[k] = m[k] || { dep: 0, use: 0 }; m[k][t.type === "deposit" ? "dep" : "use"] += t.amount; } return m; };
+const total = txs => txs.reduce((s, t) => s + (t.type === "deposit" ? t.amount : -t.amount), 0);
+const hasSig = t => Object.keys(_SIG_KINDS).some(k => t[k]);
 const sigPath = (txId, kind, dataUrl) => txId + "/" + kind + (dataUrl.startsWith("data:image/png") ? ".png" : ".jpg");
 
 // ----- 1. 파일 검사 -----
@@ -61,6 +67,9 @@ if (rtFail.length) problems.push("변환 왕복 불일치 " + rtFail.length + "�
 console.log("📄 " + path.basename(file) + (backup._date ? " (백업 시각 " + backup._date + ")" : ""));
 console.log("   거래처 " + cos.length + "개, 거래 " + txs.length + "건 (충전 " + txs.filter(t => t.type === "deposit").length + ", 사용 " + txs.filter(t => t.type === "usage").length + ")");
 console.log("   서명 " + sigs.length + "장, " + (sigs.reduce((s, x) => s + x.dataUrl.length, 0) / 1024 / 1024).toFixed(2) + "MB (base64)");
+console.log("   서명 보유 거래 " + txs.filter(hasSig).length + "건, 총 잔액 " + total(txs).toLocaleString("ko-KR") + "원");
+console.log("   수기 입력(backfilled) " + txs.filter(t => t.backfilled).length + "건, 날짜 수정(dateEditedFrom) " + txs.filter(t => t.dateEditedFrom).length + "건");
+console.log("   담당자 연락처 등록 거래처 " + cos.filter(c => (c.contacts || []).length).length + "곳, 설정(_cfg) " + (backup._cfg ? "있음 (홍보 " + ((backup._cfg.promos || []).length) + "개)" : "없음"));
 console.log("   거래처 없는 거래 " + orphans.length + "건");
 if (backup._auto) console.log("   ⚠️ 자동백업 파일입니다 (서명 미포함). 서명까지 옮기려면 수동 백업 파일을 쓰세요.");
 if (problems.length) { console.error("❌ 문제: " + problems.join(" / ")); process.exit(1); }
@@ -105,6 +114,10 @@ if (!VERIFY_ONLY) {
   for (const part of chunks(cos.map(_coToRow), 500)) check(await sb.from("companies").upsert(part, { onConflict: "id" }));
   const txRows = txs.map(t => ({ ...JSON.parse(JSON.stringify(_txToRow(t))), ...(uploaded.get(t.id) || {}) }));
   for (const part of chunks(txRows, 500)) check(await sb.from("transactions").upsert(part, { onConflict: "id" }));
+  if (backup._cfg && typeof backup._cfg === "object") {
+    check(await sb.from("settings").upsert({ id: "main", value: backup._cfg }, { onConflict: "id" }));
+    console.log("   설정(_cfg) 저장");
+  }
   console.log("   저장 완료");
 }
 
@@ -138,6 +151,27 @@ const sigsMissing = sigs.filter(s => {
 }).length;
 report.push("서명: 파일 " + sigs.length + "장 / 서버 기록 " + sigOnServer + "장" + (sigsMissing ? " / 누락 " + sigsMissing : ""));
 bad += sigsMissing;
+
+const sigTxLocal = txs.filter(hasSig).length;
+const sigTxServer = sTxRows.filter(r => Object.values(_SIG_KINDS).some(c => r[c])).length;
+report.push("서명 보유 거래: 파일 " + sigTxLocal + " / 서버 " + sigTxServer);
+if (sigTxLocal !== sigTxServer) bad++;
+
+report.push("총 잔액: 파일 " + total(txs).toLocaleString("ko-KR") + "원 / 서버 " + total(sTxs).toLocaleString("ko-KR") + "원");
+if (total(txs) !== total(sTxs)) bad++;
+
+const lm = monthly(txs), sm = monthly(sTxs);
+const monthDiff = [...new Set([...Object.keys(lm), ...Object.keys(sm)])].sort()
+  .filter(k => !lm[k] || !sm[k] || lm[k].dep !== sm[k].dep || lm[k].use !== sm[k].use);
+report.push("월별 충전·사용 합계(한국시간): " + Object.keys(lm).length + "개월 " + (monthDiff.length ? "불일치 " + monthDiff.join(", ") : "모두 일치"));
+bad += monthDiff.length;
+
+if (backup._cfg && typeof backup._cfg === "object") {
+  const rows = check(await sb.from("settings").select("value").eq("id", "main"));
+  const same = rows.length && canon(rows[0].value) === canon(backup._cfg);
+  report.push("설정(_cfg): " + (same ? "일치" : "불일치"));
+  if (!same) bad++;
+}
 
 report.forEach(l => console.log("   " + l));
 if (bad) { console.error("❌ 검증 실패 - 위 항목을 확인하세요"); process.exit(1); }

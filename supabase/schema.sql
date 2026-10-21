@@ -114,6 +114,27 @@ drop policy if exists audit_log_select on public.audit_log;
 create policy audit_log_select on public.audit_log for select to authenticated using (true);
 
 -- ============================================================
+-- 4-2. 설정 (v19.9 ledger_cfg: 충전요청 기준 금액, 정기 문자, 매장 홍보)
+--      기존 프로젝트에는 002_settings.sql만 실행
+-- ============================================================
+create table if not exists public.settings (
+  id          text primary key,            -- 항상 'main' 한 행
+  value       jsonb not null default '{}',
+  inserted_at timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+drop trigger if exists settings_touch on public.settings;
+create trigger settings_touch before update on public.settings
+  for each row execute function public.touch_updated_at();
+alter table public.settings enable row level security;
+drop policy if exists settings_select on public.settings;
+drop policy if exists settings_insert on public.settings;
+drop policy if exists settings_update on public.settings;
+create policy settings_select on public.settings for select to authenticated using (true);
+create policy settings_insert on public.settings for insert to authenticated with check (true);
+create policy settings_update on public.settings for update to authenticated using (true) with check (true);
+
+-- ============================================================
 -- 5. 서명 이미지 저장소 (비공개 버킷)
 -- ============================================================
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)

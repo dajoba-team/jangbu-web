@@ -64,7 +64,10 @@ const _rowToTx = r => {
 const _snap = { cos: new Map(), txs: new Map() };
 let _loaded = false;
 let _sigRows = [];        // 초기 로드 시 서명 경로가 있는 거래 행
+const _sigPaths = new Map(); // txId → { sig, staffSig, adminSig } 서버 파일 경로 (백업 시 이미지 받기용)
 let _lastWrite = null;    // 직전 metaSet에서 쓴 id (저장 검증용)
+let _loadedResolve;
+const _loadedP = new Promise(r => { _loadedResolve = r; }); // 최초 로드(+대기 목록 재전송) 완료
 
 // ===== 화면 오버레이 (로그인 / 오류) =====
 const _overlay = html => {
@@ -174,7 +177,7 @@ const _pendSave = p => {
   catch (e) { console.error("[storage] pending save failed:", e); }
 };
 const _pendEdit = fn => { const p = _pendLoad(); fn(p); _pendSave(p); };
-const _pendCount = p => ["companies", "transactions"].reduce((n, t) => n + Object.keys(p.rows[t]).length + Object.keys(p.del[t]).length, 0) + Object.keys(p.sigs).length;
+const _pendCount = p => ["companies", "transactions"].reduce((n, t) => n + Object.keys(p.rows[t]).length + Object.keys(p.del[t]).length, 0) + Object.keys(p.sigs).length + (p.cfg ? 1 : 0);
 
 // 행 upsert 후 성공한 만큼 스냅샷 갱신 → 중간에 실패해도 다음 저장 때 남은 것만 다시 보냄
 const _upsert = async (table, snapMap, rows) => {
@@ -209,6 +212,7 @@ const _flushPending = async () => {
   await _softDelete("transactions", dummy, Object.keys(p.del.transactions));
   await _softDelete("companies", dummy, Object.keys(p.del.companies));
   for (const rec of Object.values(p.sigs)) await _uploadSigRec(rec);
+  if (p.cfg) await _saveSettings(p.cfg);
 };
 
 const _initialLoad = async () => {
@@ -222,7 +226,13 @@ const _initialLoad = async () => {
   _snap.cos = new Map(cos.map(c => [c.id, JSON.stringify(_coToRow(c))]));
   _snap.txs = new Map(txs.map(t => [t.id, JSON.stringify(_txToRow(t))]));
   _sigRows = txRows.filter(r => r.sig_path || r.staff_sig_path || r.admin_sig_path);
+  _sigRows.forEach(r => {
+    const m = {};
+    for (const [kind, col] of Object.entries(_SIG_KINDS)) if (r[col]) m[kind] = r[col];
+    _sigPaths.set(r.id, m);
+  });
   _loaded = true;
+  _loadedResolve();
   return { cos, txs };
 };
 
@@ -332,7 +342,12 @@ async function _uploadSigRec(rec) {
     _check(await _sb.storage.from(SIG_BUCKET).upload(path, blob, { upsert: true, contentType: blob.type }));
     cols[col] = path;
   }
-  if (Object.keys(cols).length) _check(await _sb.from("transactions").update(cols).eq("id", rec.txId));
+  if (Object.keys(cols).length) {
+    _check(await _sb.from("transactions").update(cols).eq("id", rec.txId));
+    const m = _sigPaths.get(rec.txId) || {};
+    for (const [kind, col] of Object.entries(_SIG_KINDS)) if (cols[col]) m[kind] = cols[col];
+    _sigPaths.set(rec.txId, m);
+  }
   _pendEdit(p => delete p.sigs[rec.txId]);
 }
 
@@ -346,6 +361,52 @@ const sigsPut = async arr => {
   const queue = fresh.slice();
   const worker = async () => { for (let rec; (rec = queue.shift());) await _uploadSigRec(rec); };
   await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
+};
+
+// ===== 설정 (v19.9 ledger_cfg: 문자 기준 금액, 정기 문자, 매장 홍보 등) =====
+// v19.9는 기기 안(IndexedDB+localStorage)에만 저장 → 서버 settings 테이블 한 행("main")으로 공유
+async function _saveSettings(v) {
+  _check(await _sb.from("settings").upsert({ id: "main", value: v }, { onConflict: "id" }));
+  _pendEdit(p => { if (p.cfg && JSON.stringify(p.cfg) === JSON.stringify(v)) delete p.cfg; });
+}
+const cfgGet = async () => {
+  await _ensureLogin();
+  await _loadedP; // 대기 중이던 설정이 먼저 재전송된 뒤 읽음
+  const rows = _check(await _sb.from("settings").select("value").eq("id", "main"));
+  return rows.length ? rows[0].value : null;
+};
+// 실패해도 대기 목록에 남아 다음 실행 때 재전송
+const cfgSet = async v => {
+  _pendEdit(p => { p.cfg = v; });
+  await _ensureLogin();
+  await _saveSettings(v);
+};
+
+// ===== 수동 백업용: 서명 주소(URL) → 이미지(data URL) =====
+// v19.9 백업 파일과 같은 형식(서명 base64 포함)으로 내보내기 위해 서버에서 서명 파일을 받아 채움
+const _blobToDataUrl = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
+const sigsToDataUrls = async txs => {
+  await _ensureLogin();
+  const jobs = [];
+  txs.forEach((t, i) => {
+    const paths = _sigPaths.get(t.id) || {};
+    for (const kind of Object.keys(_SIG_KINDS)) {
+      const v = t[kind];
+      if (typeof v === "string" && !v.startsWith("data:") && paths[kind]) jobs.push({ i, kind, path: paths[kind] });
+    }
+  });
+  const out = txs.map(t => ({ ...t }));
+  let failed = 0;
+  const queue = jobs.slice();
+  await Promise.all(Array.from({ length: Math.min(8, queue.length) }, async () => {
+    for (let j; (j = queue.shift());) {
+      const { data, error } = await _sb.storage.from(SIG_BUCKET).download(j.path);
+      if (error) { failed++; console.error("[storage] signature download failed:", j.path, error); continue; }
+      out[j.i][j.kind] = await _blobToDataUrl(data);
+    }
+  }));
+  if (failed) throw new Error("서명 " + failed + "장을 받지 못했습니다. 인터넷 연결을 확인하고 다시 시도하세요");
+  return out;
 };
 
 // 거래는 소프트 삭제라 서명 파일도 보관 (복구 대비) → 아무것도 하지 않음
